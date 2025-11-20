@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "653513093927",
+    "project_id": "smart-lock-5a0a5",
+    "storage_bucket": "smart-lock-5a0a5.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:653513093927:android:b478d4579524d082ffef02",
+        "android_client_info": {
+          "package_name": "com.example.smart_lock"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDRP9tvpPVZIuDPcmXrH19d2Q2W4x7iT8g"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
