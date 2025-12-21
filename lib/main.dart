@@ -1,10 +1,12 @@
-import 'package:firebase_auth/firebase_auth.dart';
+
 import 'package:flutter/material.dart';
 import 'package:smart_lock/screens/auth.dart';
 import 'package:smart_lock/screens/home.dart';
 import 'package:smart_lock/screens/splash.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
+import 'package:smart_lock/providers/auth_provider.dart';
+
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 void main()async {
@@ -17,31 +19,31 @@ void main()async {
     );
 }
 
-class App extends StatelessWidget {
+class App extends ConsumerWidget {
   const App({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final authState = ref.watch(authStateProvider);
+
     return MaterialApp(
       title: 'SmartLock',
       debugShowCheckedModeBanner: false,
       theme: ThemeData().copyWith(
         colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color.fromARGB(255,63,17,177) ,
-       ),
+          seedColor: const Color.fromARGB(255, 63, 17, 177),
+        ),
       ),
-      home:StreamBuilder(
-        stream: FirebaseAuth.instance.authStateChanges(), 
-        builder:(ctx,snapshot){
-          if(snapshot.connectionState == ConnectionState.waiting){
-            return const SplashScreen();
+      home: authState.when(
+        loading: () => const SplashScreen(),
+        error: (e, _) => const AuthScreen(),
+        data: (user) {
+          if (user == null) {
+            return AuthScreen();
           }
-          if(snapshot.hasData){
-            return const HomeScreen();
-          }
-          return AuthScreen();
-        }
-      ) ,
+          return const HomeScreen();
+        },
+      ),
     );
   }
 }

@@ -4,10 +4,15 @@ import 'package:flutter_riverpod/legacy.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../models/lock.dart';
 import '../service.dart/mqtt_service.dart';
+import '../service.dart/history_service.dart';
 
 class LockNotifier extends StateNotifier<List<LockModel>> {
-  LockNotifier() : super([]) {
-    _init();
+ LockNotifier() : super([]) {
+    FirebaseAuth.instance.authStateChanges().listen((user) {
+      if (user != null) {
+        _init();
+      }
+    });
   }
 
   final _db = FirebaseFirestore.instance.collection("locks");
@@ -15,44 +20,62 @@ class LockNotifier extends StateNotifier<List<LockModel>> {
 
   StreamSubscription? _lockSub;
   final Set<String> _mqttSubscribed = {};
+  String _role = 'user';
 
   // ======================================================
   // INIT
   // ======================================================
   Future<void> _init() async {
-    await _lockSub?.cancel();
-    _mqttSubscribed.clear();
-    state = [];
+  if (!mounted) return;
 
-    final user = _auth.currentUser;
-    if (user == null) return;
+  await _lockSub?.cancel();
+  _lockSub = null;
 
+  state = [];
+  _mqttSubscribed.clear();
+
+  final user = _auth.currentUser;
+  if (user == null) return;
+
+  try {
     final userDoc = await FirebaseFirestore.instance
         .collection("users")
         .doc(user.uid)
         .get();
 
-    final role = userDoc.data()?['role'];
-
-    // =========================
-    // ADMIN → ALL LOCKS
-    // =========================
-    if (role == 'admin') {
-      _lockSub = _db.snapshots().listen(_onSnapshot);
+    if (!userDoc.exists) {
+      _role = 'user';
+      return;
     }
 
-    // =========================
-    // USER → SHARED ONLY
-    // =========================
-    else {
-      _lockSub = _db
-          .where("sharedWith", arrayContains: user.email)
-          .snapshots()
-          .listen(_onSnapshot);
-    }
+    _role = userDoc.data()?['role'] ?? 'user';
 
-    mqttService.onMessage = _onMqttMessage;
+    print("👤 USER ROLE = $_role");
+
+  } catch (e) {
+    print("❌ LOAD ROLE FAILED: $e");
+    _role = 'user';
+    return;
   }
+
+  if (_role == 'admin') {
+    _lockSub = _db.snapshots().listen(_onSnapshot);
+  } else {
+    final email = user.email!.toLowerCase().trim();
+    _lockSub = _db
+        .where("sharedWith", arrayContains: email)
+        .snapshots()
+        .listen(_onSnapshot);
+  }
+
+  mqttService.onMessage = _onMqttMessage;
+}
+
+
+
+
+  bool get isAdmin => _role == 'admin';
+
 
   // ======================================================
   // SNAPSHOT
@@ -70,61 +93,66 @@ class LockNotifier extends StateNotifier<List<LockModel>> {
   }
 
   // ======================================================
-  // MQTT
+  // MQTT CONFIRM (ESP32 → APP)
   // ======================================================
   Future<void> _onMqttMessage(
-    String lockId,
-    Map<String, dynamic> data,
-  ) async {
-    await updateLock(lockId, {
-      "isLocked": data["locked"],
-      "isOnline": data["online"],
-      "lastUpdated": DateTime.now(),
-    });
+  String lockId,
+  Map<String, dynamic> data,
+) async {
+  // 🚨 user đã logout thì BỎ QUA
+  if (_auth.currentUser == null) return;
 
-    await addHistory(
-      lockId,
-      data["locked"] ? "Đã khóa" : "Đã mở khóa",
-    );
-  }
+  if (!data.containsKey("locked")) return;
+
+  await _db.doc(lockId).update({
+    "isLocked": data["locked"],
+    "isOnline": data["online"] ?? true,
+    "lastUpdated": FieldValue.serverTimestamp(),
+  });
+
+  await historyService.save(
+    lockId: lockId,
+    action: data["locked"] ? "lock" : "unlock",
+    method: data["method"] ?? "unknown",
+    by: data["by"] ?? "device",
+  );
+}
 
   // ======================================================
-  // CORE
+  // USER ACTION (SEND REQUEST ONLY)
   // ======================================================
-  Future<void> updateLock(
-    String lockId,
-    Map<String, dynamic> update,
-  ) async {
-    await _db.doc(lockId).update(update);
-  }
-
   Future<void> toggleLock(String lockId) async {
-    final lock = state.firstWhere((l) => l.id == lockId);
+  final lock = state.firstWhere((l) => l.id == lockId);
+  final user = _auth.currentUser;
+  if (user == null) return;
 
-    await mqttService.sendCommand(lockId, !lock.isLocked);
+  final email = user.email!.toLowerCase().trim();
 
-    await addHistory(
-      lockId,
-      !lock.isLocked ? "Yêu cầu khóa" : "Yêu cầu mở khóa",
-    );
+  if (!isAdmin && !lock.sharedWith.contains(email)) {
+    throw Exception("❌ Bạn không có quyền mở khóa này");
   }
+
+  await mqttService.sendCommand(
+    lockId,
+    !lock.isLocked,
+    email,
+  );
+}
+
 
   // ======================================================
   // ADMIN ONLY
   // ======================================================
-  Future<void> addLock(String id, String name) async {
-    final user = _auth.currentUser;
-    if (user == null) return;
-
-    final userDoc = await FirebaseFirestore.instance
-        .collection("users")
-        .doc(user.uid)
-        .get();
-
-    if (userDoc.data()?['role'] != 'admin') {
-      throw Exception("Không có quyền thêm khóa");
+  void _requireAdmin() {
+    if (!isAdmin) {
+      throw Exception("❌ Bạn không có quyền admin");
     }
+  }
 
+  Future<void> addLock(String id, String name) async {
+    _requireAdmin();
+
+    final user = _auth.currentUser!;
     final ref = _db.doc(id);
 
     await ref.set({
@@ -132,76 +160,91 @@ class LockNotifier extends StateNotifier<List<LockModel>> {
       "ownerId": user.uid,
       "isLocked": true,
       "isOnline": false,
-      "lastUpdated": DateTime.now(),
       "sharedWith": [],
+      "lastUpdated": FieldValue.serverTimestamp(),
     });
 
-    await ref.collection("history").add({
-      "action": "Khởi tạo khóa",
-      "timestamp": DateTime.now(),
-      "by": user.email,
-    });
+    await historyService.save(
+      lockId: id,
+      action: "lock",
+      method: "system",
+      by: user.email!,
+    );
   }
 
   Future<void> removeLock(String lockId) async {
+    _requireAdmin();
     await _db.doc(lockId).delete();
   }
 
-  // ======================================================
-  // SHARE
-  // ======================================================
   Future<void> shareLock(String lockId, String email) async {
-    await _db.doc(lockId).update({
-      "sharedWith": FieldValue.arrayUnion([email])
-    });
+  _requireAdmin();
 
-    await addHistory(lockId, "Chia sẻ quyền cho $email");
-  }
+  final normalizedEmail = email.toLowerCase().trim();
+
+  await _db.doc(lockId).update({
+    "sharedWith": FieldValue.arrayUnion([normalizedEmail])
+  });
+
+  await historyService.save(
+    lockId: lockId,
+    action: "share",
+    method: "system",
+    by: normalizedEmail,
+  );
+}
+
+
 
   Future<void> unshareLock(String lockId, String email) async {
-    await _db.doc(lockId).update({
-      "sharedWith": FieldValue.arrayRemove([email])
-    });
+  _requireAdmin();
 
-    await addHistory(lockId, "Hủy chia sẻ quyền của $email");
-  }
+  final normalizedEmail = email.toLowerCase().trim();
+
+  await _db.doc(lockId).update({
+    "sharedWith": FieldValue.arrayRemove([normalizedEmail])
+  });
+
+  await historyService.save(
+    lockId: lockId,
+    action: "unshare",
+    method: "system",
+    by: normalizedEmail,
+  );
+}
+
+
+
+  Future<void> updateLock(
+  String lockId,
+  Map<String, dynamic> update,
+) async {
+  await _db.doc(lockId).update(update);
+}
 
   // ======================================================
-  // HISTORY
+  // FIND USER
   // ======================================================
-  Future<void> addHistory(String lockId, String action) async {
-    final user = _auth.currentUser;
+  Future<String?> findUserUidByEmail(String email) async {
+  final normalizedEmail = email.toLowerCase().trim();
 
-    await _db.doc(lockId).collection("history").add({
-      "action": action,
-      "timestamp": DateTime.now(),
-      "by": user?.email,
-    });
-  }
-
-  // ======================================================
-  // CLEANUP
-  // ======================================================
-  // ======================================================
-// 🔍 FIND USER UID BY EMAIL
-// ======================================================
-Future<String?> findUserUidByEmail(String email) async {
   final query = await FirebaseFirestore.instance
       .collection("users")
-      .where("email", isEqualTo: email)
+      .where("email", isEqualTo: normalizedEmail)
       .limit(1)
       .get();
 
-  if (query.docs.isEmpty) return null;
-
-  return query.docs.first.id;
+  return query.docs.isEmpty ? null : query.docs.first.id;
 }
 
+
   @override
-  void dispose() {
-    _lockSub?.cancel();
-    super.dispose();
-  }
+void dispose() {
+  _lockSub?.cancel();
+  _lockSub = null;
+  mqttService.unsubscribeAll(); 
+  super.dispose();
+}
 }
 
 // Provider

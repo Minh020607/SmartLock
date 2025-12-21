@@ -18,7 +18,12 @@ class MqttService {
   // -----------------------------
   // 🔌 KẾT NỐI MQTT
   // -----------------------------
+  bool _shouldReconnect = true;
+  bool _listening = false;
+
+
   Future<void> connect() async {
+      _shouldReconnect = true;
     if (_client != null &&
         _client!.connectionStatus!.state == MqttConnectionState.connected) {
       return; // Đã kết nối
@@ -30,9 +35,12 @@ class MqttService {
     _client!.logging(on: false);
 
     _client!.onDisconnected = () {
-      print("⚠ MQTT disconnected → retrying in 3s");
-      Future.delayed(const Duration(seconds: 3), connect);
-    };
+  print("⚠ MQTT disconnected");
+
+  if (_shouldReconnect) {
+    Future.delayed(const Duration(seconds: 3), connect);
+  }
+};
 
     try {
       await _client!.connect();
@@ -44,7 +52,11 @@ class MqttService {
     }
 
     // Bắt đầu nhận message
-    _client!.updates!.listen(_handleMessage);
+    if (!_listening) {
+  _client!.updates!.listen(_handleMessage);
+  _listening = true;
+}
+
   }
 
   // -----------------------------
@@ -62,6 +74,41 @@ class MqttService {
 
     print("📡 Subscribed: $topic");
   }
+
+  Future<void> unsubscribeLock(String lockId) async {
+  if (_client == null || _client!.connectionStatus?.state != MqttConnectionState.connected) {
+    return;
+  }
+
+  final topic = "smartlock/$lockId/status";
+
+  if (!_subscribedTopics.contains(topic)) return;
+
+  _client!.unsubscribe(topic);
+  _subscribedTopics.remove(topic);
+
+  print("📴 Unsubscribed: $topic");
+}
+
+Future<void> unsubscribeAll() async {
+  _shouldReconnect = false;
+  _listening = false;
+
+  if (_client == null) return;
+
+  for (final topic in _subscribedTopics) {
+    _client!.unsubscribe(topic);
+    print("📴 Unsubscribed: $topic");
+  }
+
+  _subscribedTopics.clear();
+
+  _client!.disconnect();
+  _client = null;
+
+  print("🔌 MQTT fully disconnected");
+}
+
 
   // -----------------------------
   // 📥 XỬ LÝ MESSAGE MQTT
@@ -94,23 +141,25 @@ class MqttService {
   // -----------------------------
   // 🚀 GỬI LỆNH ĐIỀU KHIỂN
   // -----------------------------
-  Future<void> sendCommand(String lockId, bool lock) async {
-    await connect();
 
-    final topic = "smartlock/$lockId/cmd";
+  Future<void> sendCommand(String lockId, bool lock, String by) async {
+  await connect();
 
-    final payload = jsonEncode({
-      "action": lock ? "lock" : "unlock",
-      "timestamp": DateTime.now().millisecondsSinceEpoch,
-    });
+  final topic = "smartlock/$lockId/cmd";
 
-    final builder = MqttClientPayloadBuilder();
-    builder.addString(payload);
+  final payload = jsonEncode({
+    "action": lock ? "lock" : "unlock",
+    "by": by,
+  });
 
-    _client!.publishMessage(topic, MqttQos.atLeastOnce, builder.payload!);
+  final builder = MqttClientPayloadBuilder();
+  builder.addString(payload);
 
-    print("🚀 MQTT Sent → $topic : $payload");
-  }
+  _client!.publishMessage(topic, MqttQos.atLeastOnce, builder.payload!);
+   print("🚀 MQTT Sent → $topic : $payload");
+}
+
+  
 }
 
 final mqttService = MqttService();

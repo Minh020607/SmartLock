@@ -11,30 +11,46 @@ class LockCard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return Opacity(
-      opacity: lock.isOnline ? 1 : 0.8,
+      opacity: lock.isOnline ? 1 : 0.5,
       child: Card(
         clipBehavior: Clip.hardEdge,
         elevation: 2,
         margin: const EdgeInsets.only(bottom: 12),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+        ),
         child: ListTile(
           leading: Icon(
             lock.isLocked ? Icons.lock : Icons.lock_open,
             color: lock.isLocked ? Colors.red : Colors.green,
           ),
           title: Text(lock.name),
-          subtitle: Text(lock.isOnline ? 'Online' : 'Offline'),
+          subtitle: Text(
+            lock.isOnline ? 'Online' : 'Offline',
+            style: TextStyle(
+              color: lock.isOnline ? Colors.green : Colors.grey,
+            ),
+          ),
+
+          /// 🔥 SWITCH BẬT / TẮT
           trailing: Switch(
             value: !lock.isLocked,
-            onChanged: (value) => ref.read(lockProvider.notifier).toggleLock(lock.id)
-                // lock.isOnline
-                // ? (value) => ref.read(lockProvider.notifier).toggleLock(lock.id)
-                // : null,
+            onChanged: lock.isOnline
+                ? (value) async {
+                    print(
+                        "👉 UI toggle pressed | lockId=${lock.id} | value=$value");
+
+                    await ref
+                        .read(lockProvider.notifier)
+                        .toggleLock(lock.id);
+                  }
+                : null,
           ),
-          onTap: (){
+
+          onTap: () {
             Navigator.of(context).push(
               MaterialPageRoute(
-                builder: (context)=>LockDetailScreen(lock: lock)
+                builder: (_) => LockDetailScreen(lock: lock),
               ),
             );
           },

@@ -20,56 +20,82 @@ class _AuthScreen extends State<AuthScreen> {
   bool _isLoading = false;
 
   Future<void> _submit() async {
-    final isValid = _form.currentState!.validate();
-    if (!isValid) return;
-    _form.currentState!.save();
+  final isValid = _form.currentState!.validate();
+  if (!isValid) return;
+  _form.currentState!.save();
 
-    setState(() => _isLoading = true);
+  setState(() => _isLoading = true);
 
-    try {
-      if (_isLogin) {
-        // 🔐 Đăng nhập
-        await _firebase.signInWithEmailAndPassword(
-          email: _enteredEmail,
-          password: _enteredPassword,
-        );
-      } else {
-        // 🆕 Đăng ký tài khoản mới
-        final userCredential = await _firebase.createUserWithEmailAndPassword(
-          email: _enteredEmail,
-          password: _enteredPassword,
-        );
+  try {
+    UserCredential userCredential;
 
-        // 💾 Ghi thông tin user vào Firestore
-        await _firestore.collection('users').doc(userCredential.user!.uid).set({
+    if (_isLogin) {
+      // 🔐 Đăng nhập
+      userCredential = await _firebase.signInWithEmailAndPassword(
+        email: _enteredEmail,
+        password: _enteredPassword,
+      );
+
+      // ✅ ĐẢM BẢO USER DOC TỒN TẠI
+      final userDoc = await _firestore
+          .collection('users')
+          .doc(userCredential.user!.uid)
+          .get();
+
+      if (!userDoc.exists) {
+        await _firestore
+            .collection('users')
+            .doc(userCredential.user!.uid)
+            .set({
           'email': _enteredEmail.trim(),
           'createdAt': FieldValue.serverTimestamp(),
-          'role':'user',
+          'role': 'user', // default
         });
       }
-    } on FirebaseAuthException catch (error) {
-      String message = 'Đăng nhập thất bại.';
+    } else {
+      // 🆕 Đăng ký
+      userCredential =
+          await _firebase.createUserWithEmailAndPassword(
+        email: _enteredEmail,
+        password: _enteredPassword,
+      );
 
-      if (error.code == 'email-already-in-use') {
-        message = 'Email này đã được đăng ký.';
-      } else if (error.code == 'invalid-email') {
-        message = 'Email không hợp lệ.';
-      } else if (error.code == 'user-not-found') {
-        message = 'Không tìm thấy người dùng này.';
-      } else if (error.code == 'wrong-password') {
-        message = 'Sai mật khẩu.';
-      }
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).clearSnackBars();
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(message),
-        ));
-      }
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
+      await _firestore
+          .collection('users')
+          .doc(userCredential.user!.uid)
+          .set({
+        'email': _enteredEmail.trim(),
+        'createdAt': FieldValue.serverTimestamp(),
+        'role': 'user',
+      });
     }
+
+    // ✅ KHÔNG NAVIGATE Ở ĐÂY
+    // ĐỂ authStateChanges xử lý
+
+  } on FirebaseAuthException catch (error) {
+    String message = 'Authentication failed.';
+
+    if (error.code == 'email-already-in-use') {
+      message = 'Email này đã được đăng ký.';
+    } else if (error.code == 'invalid-email') {
+      message = 'Email không hợp lệ.';
+    } else if (error.code == 'user-not-found') {
+      message = 'Không tìm thấy người dùng.';
+    } else if (error.code == 'wrong-password') {
+      message = 'Sai mật khẩu.';
+    }
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message)),
+      );
+    }
+  } finally {
+    if (mounted) setState(() => _isLoading = false);
   }
+}
+
 
   @override
   Widget build(BuildContext context) {
