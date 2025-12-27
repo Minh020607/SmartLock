@@ -5,161 +5,131 @@ import 'package:mqtt_client/mqtt_server_client.dart';
 class MqttService {
   MqttServerClient? _client;
 
-  final String broker = "broker.emqx.io";
-  final int port = 1883; // ❗ Chỉnh về 1883 để tránh lỗi SSL
+  // Thông tin lấy từ ảnh chụp màn hình của bạn
+  final String broker = "d60daf22.ala.asia-southeast1.emqxsl.com";
+  final int port = 8883; 
 
-  /// Danh sách topic đang subscribe
+
+  // Thông tin lấy từ ảnh mục Authentication của bạn
+  final String username = "anhminh";
+  final String password = "020623";
+
   final Set<String> _subscribedTopics = {};
-
-  /// Callback khi nhận message
-  /// Map = { "lockId": "...", "locked": true/false, "online": true/false }
   Function(String lockId, Map<String, dynamic> data)? onMessage;
 
-  // -----------------------------
-  // 🔌 KẾT NỐI MQTT
-  // -----------------------------
-  bool _shouldReconnect = true;
-  bool _listening = false;
+  bool _isConnecting = false;
 
+  // ===== HÀM KẾT NỐI CHUẨN =====
+  Future<bool> connect() async {
+  if (_isConnecting) return false;
+  if (_client?.connectionStatus?.state == MqttConnectionState.connected) return true;
 
-  Future<void> connect() async {
-      _shouldReconnect = true;
-    if (_client != null &&
-        _client!.connectionStatus!.state == MqttConnectionState.connected) {
-      return; // Đã kết nối
+  _isConnecting = true;
+  // Dùng ClientID ngắn gọn để máy Oppo dễ xử lý
+  final clientId = "oppo_lock_${DateTime.now().millisecondsSinceEpoch.toString().substring(10)}";
+  
+  _client = MqttServerClient(broker, clientId);
+  _client!
+    ..port = 8883 
+    ..secure = true 
+    ..keepAlivePeriod = 60
+    ..connectTimeoutPeriod = 20000 
+    ..autoReconnect = true 
+    ..setProtocolV311()
+    ..onDisconnected = _onDisconnected;
+
+  _client!.onBadCertificate = (dynamic cert) => true;
+
+  final connMess = MqttConnectMessage()
+      .withClientIdentifier(clientId)
+      .authenticateAs("anhminh", "020623") // Khớp hoàn toàn với Console
+      .startClean();
+
+  _client!.connectionMessage = connMess;
+
+  try {
+    print("⏳ Đang kết nối SSL đến EMQX...");
+    await _client!.connect();
+    
+    // Đợi 1 giây để trạng thái kết nối cập nhật xong trên Android
+    await Future.delayed(const Duration(seconds: 1));
+
+    if (_client?.connectionStatus?.state == MqttConnectionState.connected) {
+      print("✅ MQTT CONNECTED!");
+      _client!.updates!.listen(_handleMessage);
+      return true;
     }
-
-    _client = MqttServerClient(broker, "flutter_${DateTime.now().millisecondsSinceEpoch}");
-    _client!.port = port;
-    _client!.keepAlivePeriod = 20;
-    _client!.logging(on: false);
-
-    _client!.onDisconnected = () {
-  print("⚠ MQTT disconnected");
-
-  if (_shouldReconnect) {
-    Future.delayed(const Duration(seconds: 3), connect);
+  } catch (e) {
+    print("❌ Lỗi kết nối: $e");
+  } finally {
+    _isConnecting = false;
   }
-};
-
-    try {
-      await _client!.connect();
-      print("✅ MQTT CONNECTED");
-    } catch (e) {
-      print("❌ MQTT connect error: $e");
-      _client!.disconnect();
-      return;
-    }
-
-    // Bắt đầu nhận message
-    if (!_listening) {
-  _client!.updates!.listen(_handleMessage);
-  _listening = true;
+  return false;
 }
 
+  void _onDisconnected() {
+    print("⚠ MQTT Disconnected");
+    _subscribedTopics.clear();
+    _isConnecting = false;
   }
 
-  // -----------------------------
-  // 📌 ĐĂNG KÝ TOPIC CHO 1 KHÓA
-  // -----------------------------
+  // ===== SUBSCRIBE =====
   Future<void> subscribeLock(String lockId) async {
-    await connect(); // đảm bảo đã kết nối
+    // Đảm bảo kết nối xong mới tiến hành Sub
+    bool success = await connect();
 
-    final topic = "smartlock/$lockId/status";
+    if (success) {
+      final topic = "smartlock/$lockId/status";
+      if (_subscribedTopics.contains(topic)) return;
 
-    if (_subscribedTopics.contains(topic)) return;
-
-    _client!.subscribe(topic, MqttQos.atLeastOnce);
-    _subscribedTopics.add(topic);
-
-    print("📡 Subscribed: $topic");
+      print("📡 Đang đăng ký topic: $topic");
+      _client!.subscribe(topic, MqttQos.atLeastOnce);
+      _subscribedTopics.add(topic);
+    } else {
+      print("❌ Không thể Sub vì kết nối thất bại");
+    }
   }
 
-  Future<void> unsubscribeLock(String lockId) async {
-  if (_client == null || _client!.connectionStatus?.state != MqttConnectionState.connected) {
-    return;
+  // ===== GỬI LỆNH =====
+  Future<void> sendCommand(String lockId, bool lock, String by) async {
+    bool success = await connect();
+
+    if (success) {
+      final topic = "smartlock/$lockId/cmd";
+      final payload = jsonEncode({
+        "action": lock ? "lock" : "unlock",
+        "by": by,
+      });
+
+      final builder = MqttClientPayloadBuilder();
+      builder.addString(payload);
+
+      _client!.publishMessage(topic, MqttQos.atLeastOnce, builder.payload!);
+      print("🚀 Đã gửi: $payload");
+    }
   }
 
-  final topic = "smartlock/$lockId/status";
-
-  if (!_subscribedTopics.contains(topic)) return;
-
-  _client!.unsubscribe(topic);
-  _subscribedTopics.remove(topic);
-
-  print("📴 Unsubscribed: $topic");
-}
-
-Future<void> unsubscribeAll() async {
-  _shouldReconnect = false;
-  _listening = false;
-
-  if (_client == null) return;
-
-  for (final topic in _subscribedTopics) {
-    _client!.unsubscribe(topic);
-    print("📴 Unsubscribed: $topic");
-  }
-
-  _subscribedTopics.clear();
-
-  _client!.disconnect();
-  _client = null;
-
-  print("🔌 MQTT fully disconnected");
-}
-
-
-  // -----------------------------
-  // 📥 XỬ LÝ MESSAGE MQTT
-  // -----------------------------
-  void _handleMessage(List<MqttReceivedMessage> events) {
-    final MqttPublishMessage recMsg = events[0].payload as MqttPublishMessage;
+  void _handleMessage(List<MqttReceivedMessage<MqttMessage>> events) {
+    final recMsg = events[0].payload as MqttPublishMessage;
     final topic = events[0].topic;
+    final payload = MqttPublishPayload.bytesToStringAsString(recMsg.payload.message);
 
-    final payload =
-        MqttPublishPayload.bytesToStringAsString(recMsg.payload.message);
-
-    print("📩 MQTT Message from $topic → $payload");
+    print("📩 Nhận tin: $topic -> $payload");
 
     try {
       final data = jsonDecode(payload);
-
-      // Lấy lockId từ topic
-      final segments = topic.split('/');
-      final lockId = segments[1];
-
-      // Gửi về UI
-      if (onMessage != null) {
-        onMessage!(lockId, data);
-      }
+      final lockId = topic.split('/')[1];
+      onMessage?.call(lockId, data);
     } catch (e) {
-      print("❌ Invalid JSON");
+      print("❌ Lỗi parse JSON");
     }
   }
 
-  // -----------------------------
-  // 🚀 GỬI LỆNH ĐIỀU KHIỂN
-  // -----------------------------
-
-  Future<void> sendCommand(String lockId, bool lock, String by) async {
-  await connect();
-
-  final topic = "smartlock/$lockId/cmd";
-
-  final payload = jsonEncode({
-    "action": lock ? "lock" : "unlock",
-    "by": by,
-  });
-
-  final builder = MqttClientPayloadBuilder();
-  builder.addString(payload);
-
-  _client!.publishMessage(topic, MqttQos.atLeastOnce, builder.payload!);
-   print("🚀 MQTT Sent → $topic : $payload");
-}
-
-  
+  void unsubscribeAll() {
+    _client?.disconnect();
+    _client = null;
+    _subscribedTopics.clear();
+  }
 }
 
 final mqttService = MqttService();
