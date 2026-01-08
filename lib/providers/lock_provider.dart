@@ -95,27 +95,27 @@ class LockNotifier extends StateNotifier<List<LockModel>> {
   // ======================================================
   // MQTT CONFIRM (ESP32 → APP)
   // ======================================================
-  Future<void> _onMqttMessage(
-  String lockId,
-  Map<String, dynamic> data,
-) async {
-  // 🚨 user đã logout thì BỎ QUA
+  Future<void> _onMqttMessage(String lockId, Map<String, dynamic> data) async {
   if (_auth.currentUser == null) return;
-
   if (!data.containsKey("locked")) return;
 
+  // Cập nhật trạng thái khóa lên Firestore
   await _db.doc(lockId).update({
     "isLocked": data["locked"],
     "isOnline": data["online"] ?? true,
     "lastUpdated": FieldValue.serverTimestamp(),
   });
 
-  await historyService.save(
-    lockId: lockId,
-    action: data["locked"] ? "lock" : "unlock",
-    method: data["method"] ?? "unknown",
-    by: data["by"] ?? "device",
-  );
+  // Chỉ lưu lịch sử khi KHÔNG PHẢI là tự động khóa (auto_lock)
+  // để tránh rác lịch sử (mở 1 dòng, đóng 1 dòng)
+  if (data["method"] != "auto_lock") {
+    await historyService.save(
+      lockId: lockId,
+      action: data["locked"] ? "lock" : "unlock",
+      method: data["method"] ?? "unknown",
+      by: data["by"] ?? "Người dùng ẩn danh", // Nếu ESP32 gửi trống thì mới hiện ẩn danh
+    );
+  }
 }
 
   // ======================================================
