@@ -20,6 +20,21 @@ class HistoryService {
       "timestamp": FieldValue.serverTimestamp(),
     });
   }
+  Future<void> clearAllHistory(String lockId) async {
+  final batch = FirebaseFirestore.instance.batch();
+  final collection = FirebaseFirestore.instance
+      .collection('locks')
+      .doc(lockId)
+      .collection('history');
+
+  final snapshots = await collection.get();
+  
+  for (final doc in snapshots.docs) {
+    batch.delete(doc.reference);
+  }
+
+  await batch.commit();
+}
 }
 
 final historyService = HistoryService();
