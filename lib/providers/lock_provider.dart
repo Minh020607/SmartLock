@@ -96,27 +96,30 @@ class LockNotifier extends StateNotifier<List<LockModel>> {
   // MQTT CONFIRM (ESP32 → APP)
   // ======================================================
   Future<void> _onMqttMessage(String lockId, Map<String, dynamic> data) async {
-  if (_auth.currentUser == null) return;
-  if (!data.containsKey("locked")) return;
+    if (_auth.currentUser == null) return;
+    // Kiểm tra thêm cả phím battery để đảm bảo dữ liệu hợp lệ
+    if (!data.containsKey("locked") && !data.containsKey("battery")) return;
 
-  // Cập nhật trạng thái khóa lên Firestore
-  await _db.doc(lockId).update({
-    "isLocked": data["locked"],
-    "isOnline": data["online"] ?? true,
-    "lastUpdated": FieldValue.serverTimestamp(),
-  });
+    print("📡 Cập nhật Firestore từ MQTT: Pin = ${data["battery"]}%");
 
-  // Chỉ lưu lịch sử khi KHÔNG PHẢI là tự động khóa (auto_lock)
-  // để tránh rác lịch sử (mở 1 dòng, đóng 1 dòng)
-  if (data["method"] != "auto_lock") {
-    await historyService.save(
-      lockId: lockId,
-      action: data["locked"] ? "lock" : "unlock",
-      method: data["method"] ?? "unknown",
-      by: data["by"] ?? "Người dùng ẩn danh", // Nếu ESP32 gửi trống thì mới hiện ẩn danh
-    );
+    // Cập nhật trạng thái khóa VÀ PIN lên Firestore
+    await _db.doc(lockId).update({
+      "isLocked": data["locked"] ?? true,
+      "isOnline": data["online"] ?? true,
+      "battery": data["battery"] ?? 100, // 🔥 THÊM DÒNG NÀY
+      "lastUpdated": FieldValue.serverTimestamp(),
+    });
+
+    // Chỉ lưu lịch sử khi KHÔNG PHẢI là tự động khóa (auto_lock)
+    if (data["method"] != "auto_lock") {
+      await historyService.save(
+        lockId: lockId,
+        action: data["locked"] ? "lock" : "unlock",
+        method: data["method"] ?? "unknown",
+        by: data["by"] ?? "Người dùng ẩn danh",
+      );
+    }
   }
-}
 
   // ======================================================
   // USER ACTION (SEND REQUEST ONLY)
@@ -160,6 +163,7 @@ class LockNotifier extends StateNotifier<List<LockModel>> {
       "ownerId": user.uid,
       "isLocked": true,
       "isOnline": false,
+      "battery": 0,
       "sharedWith": [],
       "lastUpdated": FieldValue.serverTimestamp(),
     });

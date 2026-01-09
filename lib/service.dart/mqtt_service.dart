@@ -117,11 +117,27 @@ class MqttService {
     print("📩 Nhận tin: $topic -> $payload");
 
     try {
-      final data = jsonDecode(payload);
+      Map<String, dynamic> data = jsonDecode(payload);
+      
+      // ===== CHUẨN HÓA DỮ LIỆU TẠI ĐÂY =====
+      if (data.containsKey('online')) {
+        data['isOnline'] = data['online'];
+      }
+      if (data.containsKey('locked')) {
+        data['isLocked'] = data['locked'];
+      }
+      
+      // 🔥 THÊM DÒNG NÀY:
+      // Đảm bảo phím 'battery' từ ESP32 được giữ nguyên hoặc gán vào data
+      // (LockModel của bạn đã đọc json['battery'] nên thực tế chỉ cần data có chứa phím này)
+      if (data.containsKey('battery')) {
+        print("🔋 Pin nhận được từ ESP32: ${data['battery']}%");
+      }
+
       final lockId = topic.split('/')[1];
-      onMessage?.call(lockId, data);
+      onMessage?.call(lockId, data); // Gửi data đã có 'battery' sang Provider
     } catch (e) {
-      print("❌ Lỗi parse JSON");
+      print("❌ Lỗi parse JSON: $e");
     }
   }
 
