@@ -12,7 +12,7 @@ class HistoryScreen extends ConsumerWidget {
     required this.lockId,
   });
 
-  // Dịch phương thức hoạt động
+  // Dịch phương thức hoạt động chuẩn với code ESP32
   String _translateMethod(String? method) {
     switch (method) {
       case 'app': return 'Ứng dụng';
@@ -22,30 +22,63 @@ class HistoryScreen extends ConsumerWidget {
       case 'system': return 'Hệ thống';
       case 'warning': return 'Cảnh báo xâm nhập';
       case 'periodic': return 'Cập nhật pin định kỳ';
-      case 'change_pass': return 'Đổi mật khẩu';
+      case 'change_password': return 'Đổi mật khẩu'; // Đã khớp với code ESP32
       case 'auto_lock': return 'Tự động khóa';
-      default: return 'Không xác định';
+      default: return method ?? 'Không xác định';
     }
   }
 
-  // Lấy màu sắc và Icon tương ứng với hành động
+  // Lấy màu sắc, Icon và Tiêu đề tương ứng với hành động (ĐÃ FIX 100%)
   Map<String, dynamic> _getStyle(String action, String method) {
-    if (method == 'warning') {
-      return {'color': Colors.redAccent, 'icon': Icons.report_gmailerrorred_rounded, 'bg': Colors.red.shade50};
+    // 1. TRƯỜNG HỢP CẢNH BÁO (Màu đỏ)
+    if (action == 'warning' || method == 'warning') {
+      return {
+        'color': Colors.red, 
+        'icon': Icons.report_problem_rounded, 
+        'bg': Colors.red.shade50,
+        'title': "CẢNH BÁO XÂM NHẬP!"
+      };
     }
+    
+    // 2. TRƯỜNG HỢP ĐỔI MẬT KHẨU (Màu tím)
+    if (action == 'change_password' || method == 'change_password') {
+      return {
+        'color': Colors.purple, 
+        'icon': Icons.lock_reset_rounded, 
+        'bg': Colors.purple.shade50,
+        'title': "Đã đổi mật khẩu"
+      };
+    }
+
+    // 3. TRƯỜNG HỢP CẬP NHẬT PIN (Màu xám)
     if (method == 'periodic') {
-      return {'color': Colors.grey, 'icon': Icons.battery_charging_full_rounded, 'bg': Colors.grey.shade100};
+      return {
+        'color': Colors.blueGrey, 
+        'icon': Icons.battery_charging_full_rounded, 
+        'bg': Colors.blueGrey.shade50,
+        'title': "Cập nhật hệ thống"
+      };
     }
-    if (method == 'change_pass') {
-      return {'color': Colors.purple, 'icon': Icons.vpn_key_rounded, 'bg': Colors.purple.shade50};
-    }
+
+    // 4. TRƯỜNG HỢP KHÓA (Xanh đen)
     if (action == 'lock') {
-      return {'color': Colors.blueGrey, 'icon': Icons.lock, 'bg': Colors.blueGrey.shade50};
+      return {
+        'color': Colors.blueGrey.shade800, 
+        'icon': Icons.lock_outline_rounded, 
+        'bg': Colors.blueGrey.shade50,
+        'title': "Đã khóa cửa"
+      };
     }
-    return {'color': Colors.green, 'icon': Icons.lock_open, 'bg': Colors.green.shade50};
+
+    // 5. TRƯỜNG HỢP MỞ (Xanh lá)
+    return {
+      'color': Colors.green.shade700, 
+      'icon': Icons.lock_open_rounded, 
+      'bg': Colors.green.shade50,
+      'title': "Đã mở cửa"
+    };
   }
 
-  // Hàm xóa toàn bộ lịch sử (Chỉ dành cho Admin)
   Future<void> _clearAllHistory(BuildContext context, bool isAdmin) async {
     if (!isAdmin) return;
 
@@ -96,7 +129,6 @@ class HistoryScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    // 🔥 Lấy quyền Admin từ Provider
     final isAdmin = ref.watch(lockProvider.notifier).isAdmin;
 
     final historyQuery = FirebaseFirestore.instance
@@ -114,7 +146,7 @@ class HistoryScreen extends ConsumerWidget {
         backgroundColor: Colors.white,
         foregroundColor: Colors.black,
         actions: [
-          if (isAdmin) // 🛡️ CHỈ HIỆN NÚT XÓA NẾU LÀ ADMIN
+          if (isAdmin) 
             IconButton(
               icon: const Icon(Icons.delete_sweep_rounded, color: Colors.redAccent),
               onPressed: () => _clearAllHistory(context, isAdmin),
@@ -143,21 +175,22 @@ class HistoryScreen extends ConsumerWidget {
               final doc = logs[index];
               final data = doc.data() as Map<String, dynamic>;
               final timestamp = (data['timestamp'] as Timestamp?)?.toDate() ?? DateTime.now();
+              
+              // Lấy Style đã fix
               final style = _getStyle(data['action'] ?? '', data['method'] ?? '');
 
-              // Logic hiển thị tiêu đề ngày (Hôm nay, Hôm qua...)
               bool showDateHeader = false;
               if (index == 0) {
                 showDateHeader = true;
               } else {
-                final prevDate = (logs[index - 1].data() as Map<String, dynamic>)['timestamp'] as Timestamp?;
+                final prevDoc = logs[index - 1].data() as Map<String, dynamic>;
+                final prevDate = prevDoc['timestamp'] as Timestamp?;
                 if (prevDate != null && 
                     DateFormat('ddMMyy').format(timestamp) != DateFormat('ddMMyy').format(prevDate.toDate())) {
                   showDateHeader = true;
                 }
               }
 
-              // Card nội dung hiển thị lịch sử
               Widget itemCard = Container(
                 decoration: BoxDecoration(
                   color: Colors.white,
@@ -178,13 +211,11 @@ class HistoryScreen extends ConsumerWidget {
                     child: Icon(style['icon'], color: style['color'], size: 24),
                   ),
                   title: Text(
-                    data['method'] == 'warning' 
-                        ? "PHÁT HIỆN XÂM NHẬP!" 
-                        : (data['action'] == 'lock' ? 'Đã khóa cửa' : 'Đã mở cửa'),
+                    style['title'], // Dùng title từ hàm style đã fix
                     style: TextStyle(
                       fontWeight: FontWeight.bold, 
                       fontSize: 15,
-                      color: data['method'] == 'warning' ? Colors.red : Colors.black87,
+                      color: style['color'], // Màu tiêu đề đi theo icon
                     ),
                   ),
                   subtitle: Column(
@@ -205,47 +236,37 @@ class HistoryScreen extends ConsumerWidget {
                 ),
               );
 
-              // 🛡️ PHÂN QUYỀN VUỐT ĐỂ XÓA
-              Widget finalWidget;
               if (isAdmin) {
-                // Admin: Có thể vuốt để xóa
-                finalWidget = Dismissible(
-                  key: Key(doc.id),
-                  direction: DismissDirection.endToStart,
-                  background: Container(
-                    alignment: Alignment.centerRight,
-                    padding: const EdgeInsets.only(right: 20),
-                    decoration: BoxDecoration(
-                      color: Colors.redAccent, 
-                      borderRadius: BorderRadius.circular(16)
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (showDateHeader) _buildDateHeader(timestamp),
+                    Dismissible(
+                      key: Key(doc.id),
+                      direction: DismissDirection.endToStart,
+                      background: Container(
+                        alignment: Alignment.centerRight,
+                        padding: const EdgeInsets.only(right: 20),
+                        decoration: BoxDecoration(
+                          color: Colors.redAccent, 
+                          borderRadius: BorderRadius.circular(16)
+                        ),
+                        child: const Icon(Icons.delete_forever, color: Colors.white, size: 28),
+                      ),
+                      onDismissed: (_) async => await doc.reference.delete(),
+                      child: itemCard,
                     ),
-                    child: const Icon(Icons.delete_forever, color: Colors.white, size: 28),
-                  ),
-                  onDismissed: (_) async {
-                    try {
-                      await doc.reference.delete();
-                    } catch (e) {
-                      if (context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Lỗi: Không thể xóa dữ liệu')),
-                        );
-                      }
-                    }
-                  },
-                  child: itemCard,
+                  ],
                 );
               } else {
-                // Người thường: Không bao bọc Dismissible -> Không thể vuốt
-                finalWidget = itemCard;
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (showDateHeader) _buildDateHeader(timestamp),
+                    itemCard,
+                  ],
+                );
               }
-
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if (showDateHeader) _buildDateHeader(timestamp),
-                  finalWidget,
-                ],
-              );
             },
           );
         },

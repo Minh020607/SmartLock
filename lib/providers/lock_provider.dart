@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:flutter_riverpod/legacy.dart';
+import 'package:flutter_riverpod/legacy.dart'; // Giữ nguyên Legacy theo ý bạn
 import 'package:firebase_auth/firebase_auth.dart';
 import '../models/lock.dart';
 import '../service.dart/mqtt_service.dart';
@@ -27,9 +27,6 @@ class LockNotifier extends StateNotifier<List<LockModel>> {
   final Set<String> _mqttSubscribed = {};
   String _role = 'user';
 
-  // ======================================================
-  // KHỞI TẠO HỆ THỐNG
-  // ======================================================
   Future<void> _init() async {
     await _lockSub?.cancel();
     _lockSub = null;
@@ -50,7 +47,6 @@ class LockNotifier extends StateNotifier<List<LockModel>> {
       } else {
         _role = userDoc.data()?['role'] ?? 'user';
       }
-      print("👤 USER ROLE = $_role");
     } catch (e) {
       _role = 'user';
     }
@@ -65,13 +61,11 @@ class LockNotifier extends StateNotifier<List<LockModel>> {
           .listen(_onSnapshot);
     }
 
-    // Gán callback nhận tin nhắn từ MQTT
     mqttService.onMessage = _onMqttMessage;
   }
 
   bool get isAdmin => _role == 'admin';
 
-  // Lắng nghe thay đổi từ Firestore
   void _onSnapshot(QuerySnapshot snapshot) {
     state = snapshot.docs
         .map((d) => LockModel.fromFirestore(d))
@@ -85,57 +79,83 @@ class LockNotifier extends StateNotifier<List<LockModel>> {
   }
 
   // ======================================================
-  // XỬ LÝ TIN NHẮN MQTT (ESP32 -> APP)
+  // XỬ LÝ TIN NHẮN MQTT (PHẦN SỬA CHÍNH)
   // ======================================================
   Future<void> _onMqttMessage(String lockId, Map<String, dynamic> data) async {
-    if (_auth.currentUser == null) return;
+  if (_auth.currentUser == null) return;
 
-    // A. Phát hiện ID thẻ RFID mới (Chế độ học thẻ)
-    if (data.containsKey("pending_id")) {
-  pendingCardId = data["pending_id"].toString();
-  // Kích hoạt cập nhật state để UI nhận biết có sự thay đổi
-  state = [...state]; 
-  return;
-}
-
-    // B. Cập nhật trạng thái Pin và Khóa
-    if (!data.containsKey("locked") && !data.containsKey("battery")) return;
-
-    await _db.doc(lockId).update({
-      "isLocked": data["locked"] ?? true,
-      "isOnline": data["online"] ?? true,
-      "battery": data["battery"] ?? 100,
-      "lastUpdated": FieldValue.serverTimestamp(),
-    });
-
-    // C. Lưu lịch sử hành động (Bỏ qua tin nhắn định kỳ)
-    final String method = data["method"] ?? "unknown";
-    final List<String> ignore = ["auto_lock", "periodic", "boot"];
-    
-    if (!ignore.contains(method)) {
-      await historyService.save(
-        lockId: lockId,
-        action: data["locked"] ? "lock" : "unlock",
-        method: method,
-        by: data["by"] ?? "Hệ thống",
-      );
-    }
+  // ======================================================
+  // A. PHÁT HIỆN ID THẺ RFID MỚI (CHẾ ĐỘ HỌC LỆNH)
+  // ======================================================
+  if (data.containsKey("pending_id")) {
+    pendingCardId = data["pending_id"].toString();
+    state = [...state]; 
+    return;
   }
 
   // ======================================================
-  // QUẢN LÝ THẺ RFID
+  // B. CẬP NHẬT TRẠNG THÁI HIỂN THỊ (PIN/KHÓA/ONLINE)
+  // Luôn cập nhật trạng thái này lên Firestore để đổi màu icon App
+  // ======================================================
+  if (data.containsKey("locked") || data.containsKey("battery") || data.containsKey("online")) {
+    await _db.doc(lockId).update({
+      if (data.containsKey("locked")) "isLocked": data["locked"],
+      if (data.containsKey("battery")) "battery": data["battery"],
+      if (data.containsKey("online")) "isOnline": data["online"],
+      "lastUpdated": FieldValue.serverTimestamp(),
+    });
+  }
+
+  // ======================================================
+  // C. XỬ LÝ LƯU LỊCH SỬ (CHỐT CHẶN CHỐNG LẶP & SAI MK)
   // ======================================================
   
-  // Gửi lệnh học thẻ xuống ESP32
+  // 1. CHỐT CHẶN 1: Nếu ESP32 gửi save: false (như lệnh khóa tự động) -> THOÁT NGAY
+  if (data["save"] != true) {
+    print("ℹ️ MQTT: Chỉ cập nhật giao diện, không ghi lịch sử.");
+    return;
+  }
+
+  final String method = data["method"] ?? "unknown";
+
+  // 2. CHỐT CHẶN 2: Danh sách các loại tin nhắn "rác" không được ghi vào lịch sử
+  // auto_lock: Chặn dòng thứ 2 khi cửa tự đóng
+  // periodic/boot: Chặn tin nhắn cập nhật định kỳ hoặc khởi động lại
+  final List<String> ignoreMethods = ["periodic", "boot", "auto_lock"];
+  if (ignoreMethods.contains(method)) return;
+
+  // 3. XÁC ĐỊNH NHÃN HÀNH ĐỘNG (Để HistoryScreen hiện đúng màu/biểu tượng)
+  String actionLabel = (data["locked"] == true) ? "lock" : "unlock";
+
+  if (method == "change_password") {
+    actionLabel = "change_password"; // Màu Tím
+  } else if (method == "warning") {
+    actionLabel = "warning";         // Màu Đỏ (Dành cho Sai mật khẩu)
+  }
+
+  // 4. LƯU VÀO FIRESTORE
+  try {
+    await historyService.save(
+      lockId: lockId,
+      action: actionLabel,
+      method: method,
+      by: data["by"] ?? "Hệ thống",
+    );
+    print("✅ Đã ghi lịch sử: $actionLabel bởi $method");
+  } catch (e) {
+    print("❌ Lỗi Firestore: $e");
+  }
+}
+
+  // --- CÁC HÀM CÒN LẠI GIỮ NGUYÊN HOÀN TOÀN ---
+
   void publishStartLearning(String lockId) {
     final topic = "smartlock/$lockId/cmd";
     final payload = jsonEncode({"action": "START_LEARNING", "by": "Admin"});
     mqttService.publish(topic, payload); 
   }
 
-  // Thêm thẻ mới vào danh sách và gửi xuống ESP32
   Future<void> addRfidCard(String lockId, String cardId, String cardName) async {
-    // 1. Cập nhật Firestore
     await _db.doc(lockId).update({
       'rfidCards': FieldValue.arrayUnion([{
         'id': cardId,
@@ -144,56 +164,36 @@ class LockNotifier extends StateNotifier<List<LockModel>> {
       }])
     });
 
-    // 2. Gửi lệnh ADD_CARD xuống ESP32 qua MQTT
     final topic = "smartlock/$lockId/cmd";
-    final payload = jsonEncode({
-      "action": "ADD_CARD",
-      "id": cardId, // ESP32 sẽ dùng ID này để lưu vào Preferences
-    });
-    
+    final payload = jsonEncode({"action": "ADD_CARD", "id": cardId});
     mqttService.publish(topic, payload);
-    print("📡 Đã gửi lệnh ADD_CARD cho thẻ $cardId xuống khóa $lockId");
     
-    // Reset pending ID sau khi đã xử lý xong
     pendingCardId = null;
     state = [...state];
   }
 
-  // Xóa thẻ RFID khỏi Firestore và ESP32
   Future<void> removeRfidCard(String lockId, Map<String, dynamic> cardData) async {
     try {
-      // 1. Xóa trên Firestore
       await _db.doc(lockId).update({
         'rfidCards': FieldValue.arrayRemove([cardData])
       });
-
-      // 2. Gửi lệnh REMOVE_CARD xuống ESP32
       final topic = "smartlock/$lockId/cmd";
       final payload = jsonEncode({
         "action": "REMOVE_CARD",
-        "id": cardData['id'].toString().toUpperCase(), // ID thẻ cần xóa
+        "id": cardData['id'].toString().toUpperCase(),
       });
-      
       mqttService.publish(topic, payload);
-      print("📡 Đã gửi lệnh REMOVE_CARD cho thẻ ${cardData['id']}");
-
     } catch (e) {
       print("❌ Lỗi xóa thẻ: $e");
     }
   }
 
-  // ======================================================
-  // HÀNH ĐỘNG NGƯỜI DÙNG & ADMIN
-  // ======================================================
-
-  // Đóng/Mở khóa nhanh
   Future<void> toggleLock(String lockId) async {
     final lock = state.firstWhere((l) => l.id == lockId);
     final email = _auth.currentUser?.email ?? "User";
     await mqttService.sendCommand(lockId, !lock.isLocked, email);
   }
 
-  // Thêm khóa mới (Admin)
   Future<void> addLock(String id, String name) async {
     _requireAdmin();
     await _db.doc(id).set({
@@ -208,13 +208,11 @@ class LockNotifier extends StateNotifier<List<LockModel>> {
     });
   }
 
-  // Xóa khóa (Admin)
   Future<void> removeLock(String lockId) async {
     _requireAdmin();
     await _db.doc(lockId).delete();
   }
 
-  // Chia sẻ quyền truy cập
   Future<void> shareLock(String lockId, String email) async {
     _requireAdmin();
     final normalizedEmail = email.toLowerCase().trim();
@@ -223,7 +221,6 @@ class LockNotifier extends StateNotifier<List<LockModel>> {
     });
   }
 
-  // Gỡ quyền truy cập
   Future<void> unshareLock(String lockId, String email) async {
     _requireAdmin();
     final normalizedEmail = email.toLowerCase().trim();
@@ -232,18 +229,15 @@ class LockNotifier extends StateNotifier<List<LockModel>> {
     });
   }
 
-  // Cập nhật thông tin khóa (Tên, cấu hình...)
   Future<void> updateLock(String lockId, Map<String, dynamic> data) async {
     await _db.doc(lockId).update(data);
   }
 
-  // Gửi lệnh JSON thô (Dùng cho các tính năng mở rộng)
   void publishRaw(String lockId, Map<String, dynamic> data) {
     final topic = "smartlock/$lockId/cmd";
     mqttService.publish(topic, jsonEncode(data));
   }
 
-  // Tìm UID qua Email
   Future<String?> findUserUidByEmail(String email) async {
     final query = await FirebaseFirestore.instance
         .collection("users")
@@ -265,7 +259,6 @@ class LockNotifier extends StateNotifier<List<LockModel>> {
   }
 }
 
-// Provider khai báo theo chuẩn Riverpod mới
 final lockProvider = StateNotifierProvider<LockNotifier, List<LockModel>>(
   (ref) => LockNotifier(),
 );

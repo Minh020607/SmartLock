@@ -9,8 +9,7 @@ class LockModel {
   DateTime? lastUpdated;
   final List<String> sharedWith;
   final int battery;
-  // ⭐ Bổ sung trường này
-  final List<Map<String, dynamic>> rfidCards; 
+  final List<Map<String, dynamic>> rfidCards;
 
   LockModel({
     required this.id,
@@ -21,28 +20,38 @@ class LockModel {
     this.lastUpdated,
     this.sharedWith = const [],
     required this.battery,
-    this.rfidCards = const [], // Mặc định là danh sách rỗng
+    this.rfidCards = const [],
   });
 
   factory LockModel.fromJson(Map<String, dynamic> json, String id) {
+    // Xử lý chuyển đổi battery an toàn từ num (double/int) sang int
+    int parsedBattery = 100;
+    if (json['battery'] != null) {
+      parsedBattery = (json['battery'] as num).toInt();
+    }
+
     return LockModel(
       id: id,
       name: json['name'] ?? 'Không tên',
       ownerId: json['ownerId'] ?? '',
-      isLocked: json['locked'] ?? json['isLocked'] ?? true,
-      isOnline: json['online'] ?? json['isOnline'] ?? false,
-      battery: json.containsKey('battery') ? (json['battery'] as num).toInt() : 100,
+      // Hỗ trợ cả hai cách đặt tên key (locked hoặc isLocked) để đồng bộ với ESP32
+      isLocked: json['isLocked'] ?? json['locked'] ?? true,
+      isOnline: json['isOnline'] ?? json['online'] ?? false,
+      battery: parsedBattery,
       lastUpdated: json['lastUpdated'] is Timestamp
           ? (json['lastUpdated'] as Timestamp).toDate()
           : null,
-      sharedWith: List<String>.from(json['sharedWith'] ?? []),
-      // ⭐ Bổ sung parse dữ liệu thẻ rfid
-      rfidCards: List<Map<String, dynamic>>.from(json['rfidCards'] ?? []),
+      sharedWith: (json['sharedWith'] as List?)?.map((e) => e.toString()).toList() ?? [],
+      // Parse rfidCards an toàn, tránh lỗi khi trường này không tồn tại
+      rfidCards: (json['rfidCards'] as List?)
+              ?.map((e) => Map<String, dynamic>.from(e))
+              .toList() ??
+          [],
     );
   }
 
   factory LockModel.fromFirestore(DocumentSnapshot doc) {
-    final data = doc.data() as Map<String, dynamic>;
+    final data = doc.data() as Map<String, dynamic>? ?? {};
     return LockModel.fromJson(data, doc.id);
   }
 
@@ -52,8 +61,9 @@ class LockModel {
       'ownerId': ownerId,
       'isLocked': isLocked,
       'isOnline': isOnline,
+      'battery': battery, // Đừng quên lưu pin vào Firestore
       'sharedWith': sharedWith,
-      'rfidCards': rfidCards, // ⭐ Bổ sung lưu vào Firestore
+      'rfidCards': rfidCards,
       'lastUpdated': lastUpdated != null
           ? Timestamp.fromDate(lastUpdated!)
           : FieldValue.serverTimestamp(),
@@ -67,7 +77,7 @@ class LockModel {
     int? battery,
     DateTime? lastUpdated,
     List<String>? sharedWith,
-    List<Map<String, dynamic>>? rfidCards, // ⭐ Thêm vào đây
+    List<Map<String, dynamic>>? rfidCards,
   }) {
     return LockModel(
       id: id,
@@ -78,7 +88,7 @@ class LockModel {
       battery: battery ?? this.battery,
       lastUpdated: lastUpdated ?? this.lastUpdated,
       sharedWith: sharedWith ?? this.sharedWith,
-      rfidCards: rfidCards ?? this.rfidCards, // ⭐ Cập nhật giá trị
+      rfidCards: rfidCards ?? this.rfidCards,
     );
   }
 }
